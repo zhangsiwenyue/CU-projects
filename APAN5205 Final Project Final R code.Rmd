@@ -1,0 +1,1071 @@
+---
+title: "APAN5205-Final-Project- Final R code"
+author: "Zhangsiwen Yue"
+output: html_document
+date: "2024-04-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE, message = FALSE)
+```
+
+Data Cleaning for Data Source 1
+```{r}
+data <- read.csv("C:/School/CU/APAN5205/df1.csv")
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(car)
+library(glmnet)
+#check for missing columns
+dim(data)
+missing_columns <- names(data)[colSums(is.na(data)) > 0]
+missing_columns
+#check for duplications
+df_no_duplicates <- unique(data)
+head(df_no_duplicates)
+dim(df_no_duplicates)
+summary(df_no_duplicates)
+```
+
+```{r}
+#Encoding Categorical Variables - Create a copy of the DataFrame to avoid modifying the original
+df_encoded <- df_no_duplicates
+for (column in names(df_no_duplicates)[sapply(df_no_duplicates, is.character)]) {
+  df_encoded[[column]] <- as.numeric(as.factor(df_encoded[[column]]))
+}
+head(df_encoded)
+#Computing correlation matrix
+correlation_matrix <- cor(df_encoded)
+correlation_matrix
+#Extract upper triangular part of the correlation matrix (excluding diagonal)
+upper_triangle <- upper.tri(correlation_matrix)
+#Extract correlation values from upper triangular part
+correlation_values <- correlation_matrix[upper_triangle]
+#Find the indices of the highest correlations (excluding self-correlation)
+top_correlation_indices <- order(correlation_values, decreasing = TRUE)
+#Get the variable pairs with the highest correlations
+top_correlation_pairs <- which(upper_triangle, arr.ind = TRUE)[top_correlation_indices, ]
+#Print the top correlation pairs and their correlation values
+cat("Top correlation pairs:\n")
+for (i in 1:min(10, nrow(top_correlation_pairs))) {
+  var1 <- rownames(correlation_matrix)[top_correlation_pairs[i, 1]]
+  var2 <- colnames(correlation_matrix)[top_correlation_pairs[i, 2]]
+  correlation <- correlation_values[top_correlation_indices[i]]
+  cat(var1, "-", var2, ": ", correlation, "\n")
+}
+#Extract correlations with the target variable (Heart_Disease)
+cor_with_Heart_Disease <- correlation_matrix["Heart_Disease", ]
+cor_with_Heart_Disease
+```
+
+```{r}
+#Sort correlations by absolute values in descending order
+sorted_cor <- sort(abs(cor_with_Heart_Disease), decreasing = TRUE)
+sorted_cor
+```
+
+```{r}
+#Select features with highest absolute correlations excluding target variable Heart_Disease
+selected_features <- names(sorted_cor)[-1]
+selected_features
+
+```
+
+```{r}
+#Dropping highly correlated variables where vif>5 to enliminate multicolinarity
+set.seed(1031)
+split = createDataPartition(y=df_encoded$Heart_Disease,p = 0.7,list = F,groups = 100)
+train = df_encoded[split,]
+test = df_encoded[-split,]
+model <- lm(Heart_Disease ~., data = train)
+vif_values <- vif(model)
+high_vif_vars <- names(vif_values[vif_values > 5])
+high_vif_vars
+```
+
+```{r}
+#Use lasso feature selection method
+x = model.matrix(Heart_Disease~.-1,data=train)
+y = train$Heart_Disease
+set.seed(1031)
+cv_lasso = cv.glmnet(x = x, 
+                     y = y, 
+                     alpha = 1,
+                     type.measure = 'mse')
+cv_lasso
+plot(cv_lasso)
+coef(cv_lasso, s = cv_lasso$lambda.1se) |>
+  round(6)
+```
+
+```{r}
+#Extracting most important features
+coefficients_lasso <- coef(cv_lasso, s = "lambda.1se")
+important_features <- names(coefficients_lasso[coefficients_lasso[, "s1"] != 0, "s1"])
+important_features
+```
+
+```{r}
+#Writing Cleaned Dataset
+cleaned_df <- df_encoded[c("Heart_Disease", "General_Health", "Checkup", "Exercise", "Skin_Cancer", "Other_Cancer", "Depression", "Diabetes", "Arthritis", "Sex", "Age_Category", "Smoking_History","Alcohol_Consumption")]
+head(cleaned_df)
+write.csv(cleaned_df, "C:/School/CU/APAN5205/cleaned_df1.csv", row.names = FALSE)
+```
+
+
+
+Data Cleaning for Data Source 2
+```{r}
+data2 <- read.csv("C:/School/CU/APAN5205/df2.csv")
+dim(data2)
+#Checking for missing and duplicated entries 
+missing_columns2 <- names(data2)[colSums(is.na(data2)) > 0]
+missing_columns2
+
+df2_no_duplicates <- unique(data2)
+dim(df2_no_duplicates)
+head(df2_no_duplicates)
+
+# Drop Useless Columns and factorize categorical variable
+df2 <- subset(df2_no_duplicates, select = -c(id, bp_category_encoded))
+df2$bp_category <- as.numeric(as.factor(df2$bp_category))
+head(df2)
+levels(as.factor(df2$bp_category))
+```
+
+```{r}
+#Apply PCA Dimension reduction
+#Split Data
+library(caret)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+
+correlation_matrix <- cor(df2[, sapply(df2, is.numeric)])
+melted_correlation <- melt(correlation_matrix)
+
+# Plot heatmap
+ggplot(melted_correlation, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, limits = c(-1, 1)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Correlation Matrix")
+```
+
+```{r}
+#Determine the Number of Components
+# Load required library
+library(dplyr)
+# Select numeric columns
+numeric_cols <- sapply(df2, is.numeric)
+numeric_df <- df2[, numeric_cols]
+
+# Scale the numeric variables
+scaled_df <- scale(numeric_df)
+
+# Perform PCA
+pca_result <- prcomp(scaled_df, center = TRUE, scale. = TRUE)
+
+# Examine the proportion of variance explained by each principal component
+summary(pca_result)
+
+# Determine the number of principal components to retain
+cumulative_variance <- cumsum(pca_result$sdev^2) / sum(pca_result$sdev^2)
+num_components <- sum(cumulative_variance < 0.90)  # Retain components explaining at least 90% of the variance
+
+# Select features (principal components)
+selected_features <- predict(pca_result, scaled_df)[, 1:num_components]
+
+# Combine selected features with non-numeric columns (if needed)
+selected_df <- cbind(df2[!numeric_cols], selected_features)
+
+# Extract loadings from the PCA result
+loadings <- pca_result$rotation[, 1:num_components]
+
+# Create a dataframe to store loadings
+loadings_df <- as.data.frame(loadings)
+
+# Set column names for loadings dataframe
+names(loadings_df) <- paste0("PC", 1:num_components)
+
+# Print or view the loadings dataframe
+print(loadings_df)
+```
+
+```{r}
+# Calculate the average absolute loading for each variable across all components
+abs_sum_loadings <- rowSums(abs(loadings_df))
+
+# Rank the variables based on the absolute sum of loadings
+ranked_variables <- names(sort(abs_sum_loadings, decreasing = TRUE))
+
+# Set a threshold for the importance of variables (e.g., top 85%)
+threshold <- 0.85
+
+# Calculate cumulative proportion of explained variance
+cumulative_proportion <- cumsum(pca_result$sdev^2) / sum(pca_result$sdev^2)
+
+# Determine the number of components that explain at least 'threshold' proportion of variance
+num_components_threshold <- sum(cumulative_proportion < threshold) + 1
+
+# Select the top-ranked variables that meet the threshold
+preserved_variables <- ranked_variables[1:num_components_threshold]
+
+# Print or view the preserved variables and variables to remove
+print(preserved_variables)
+```
+
+```{r}
+#Writing Cleaned Dataset
+cleaned_df2 <- df2[c("bp_category","cardio","ap_lo","weight","gluc","alco","active","ap_hi","age_years" )]
+head(cleaned_df2)
+write.csv(cleaned_df2, "C:/School/CU/APAN5205/cleaned_df2.csv", row.names = FALSE)
+```
+
+
+
+Exploratory Data Analysis for Data Source 1
+```{r}
+#Explore how each relavant feature is distributed 
+age_counts <- table(cleaned_df$Age_Category)
+smoking_counts <- table(cleaned_df$Smoking_History)
+General_Health_counts <- table(cleaned_df$General_Health)
+Checkup_counts <- table(cleaned_df$Checkup)
+Exercise_counts <- table(cleaned_df$Exercise)
+Heart_Disease_counts <- table(cleaned_df$Heart_Disease)                     
+Skin_Cancer_counts <- table(cleaned_df$Skin_Cancer) 
+Other_Cancer_counts <- table(cleaned_df$Other_Cancer)
+Depression_counts <- table(cleaned_df$Depression)
+Diabetes_counts <- table(cleaned_df$Diabetes)
+Arthritis_counts <- table(cleaned_df$Arthritis)
+Alcohol_counts <- table(cleaned_df2$Alcohol_Consumption)
+```
+
+```{r}
+barplot(age_counts, col='lightgreen', main='Distribution of Age Categories', xlab='Age Categories', ylab='Count')
+barplot(smoking_counts, col='lightcoral', main='Smoking History', xlab='Smoking History', ylab='Count')
+barplot(General_Health_counts, col='yellow', main='Distribution of General Health', xlab='General Health', ylab='Count')
+barplot(Checkup_counts, col='purple', main='Distribution of Checkup', xlab='Checkup', ylab='Count')
+barplot(Exercise_counts, col='grey', main='Distribution of Exercise', xlab='Exercise', ylab='Count')
+barplot(Heart_Disease_counts, col='pink', main='Distribution of Heart Disease', xlab='Heart Disease', ylab='Count')
+barplot(Skin_Cancer_counts, col='brown', main='Distribution of Skin Cancer', xlab='Skin Cancer', ylab='Count')
+barplot(Other_Cancer_counts, col='orange', main='Distribution of Other Cancer', xlab='Other Cancer', ylab='Count')
+barplot(Depression_counts, col='blue', main='Distribution of Depression', xlab='Depression', ylab='Count')
+barplot(Diabetes_counts, col='gold', main='Distribution of Diabetes', xlab='Diabetes', ylab='Count')
+barplot(Arthritis_counts, col='white', main='Distribution of Arthritis', xlab='Arthritis', ylab='Count')
+```
+
+```{r}
+library(dplyr)
+df <- read.csv("C:/School/CU/APAN5205/cleaned_df1.csv") %>%
+  mutate(
+    Heart_Disease = factor(Heart_Disease),
+    General_Health = factor(General_Health),
+    Checkup = factor(Checkup),
+    Exercise = factor(Exercise),
+    Skin_Cancer = factor(Skin_Cancer),
+    Other_Cancer = factor(Other_Cancer),
+    Depression = factor(Depression),
+    Diabetes = factor(Diabetes),
+    Arthritis = factor(Arthritis),
+    Sex = factor(Sex),
+    Age_Category = factor(Age_Category),
+    Smoking_History = factor(Smoking_History)
+  )
+```
+
+```{r}
+#Plotting how different levels of Age_Category are related to Cardiovascular Disease
+cardio_age_counts <- table(df$Age_Category, df$Heart_Disease)
+prop_cardio_age <- prop.table(cardio_age_counts, margin = 1)
+print(prop_cardio_age)
+
+ggplot(df, aes(x = Age_Category, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Age Category", y = "Proportion", title = "Heart Disease by Age Category") +
+  theme_minimal()
+```
+
+```{r}
+cardio_general_health_counts <- table(df$General_Health, df$Heart_Disease)
+prop_cardio_general_health <- prop.table(cardio_general_health_counts, margin = 1)
+print(prop_cardio_general_health)
+
+##Plotting how different levels of General_Health related to Cardiovascular Disease
+ggplot(df, aes(x = General_Health, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "General_Health", y = "Proportion", title = "Heart Disease by General Health") +
+  theme_minimal()
+```
+
+```{r}
+checkup_cardio_counts <- table(df$Checkup, df$Heart_Disease)
+prop_checkup_cardio <- prop.table(checkup_cardio_counts, margin = 1)
+##Plotting how different levels of Checkup are related to Cardiovascular Disease
+ggplot(df, aes(x = Checkup, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "checkup", y = "Proportion", title = "Heart Disease by checkup") +
+  theme_minimal()
+```
+
+```{r}
+skincancer_cardio_counts <- table(df$Skin_Cancer, df$Heart_Disease)
+prop_skincancer_cardio <- prop.table(skincancer_cardio_counts, margin = 1)
+prop_skincancer_cardio
+##Plotting how different levels of Checkup are related to Cardiovascular Disease
+ggplot(df, aes(x = Skin_Cancer, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Skin Cancer", y = "Proportion", title = "Heart Disease by Skin_Cancer") +
+  theme_minimal()
+```
+
+```{r}
+othercancer_cardio_counts <- table(df$Other_Cancer, df$Heart_Disease)
+prop_othercancer_cardio <- prop.table(othercancer_cardio_counts, margin = 1)
+prop_othercancer_cardio
+##Plotting how different levels of Checkup are related to Cardiovascular Disease
+ggplot(df, aes(x = Other_Cancer, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Other Cancer", y = "Proportion", title = "Heart Disease by Other_Cancer") +
+  theme_minimal()
+```
+
+```{r}
+depression_cardio_counts <- table(df$Depression, df$Heart_Disease)
+prop_depression_cardio <- prop.table(depression_cardio_counts, margin = 1)
+prop_depression_cardio
+##Plotting how different levels of Depression are related to Cardiovascular Disease
+ggplot(df, aes(x = Depression, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Depression", y = "Proportion", title = "Heart Disease by Depression") +
+  theme_minimal()
+```
+
+```{r}
+arthritis_cardio_counts <- table(df$Arthritis, df$Heart_Disease)
+prop_arthritis_cardio <- prop.table(arthritis_cardio_counts, margin = 1)
+prop_arthritis_cardio
+##Plotting how different levels of Arthritis are related to Cardiovascular Disease
+ggplot(df, aes(x = Arthritis, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Arthritis", y = "Proportion", title = "Heart Disease by Arthritis") +
+  theme_minimal()
+```
+
+```{r}
+diabetes_cardio_counts <- table(df$Diabetes, df$Heart_Disease)
+prop_diabetes_cardio <- prop.table(diabetes_cardio_counts, margin = 1)
+prop_diabetes_cardio
+##Plotting how different levels of Diabetes are related to Cardiovascular Disease
+ggplot(df, aes(x = Diabetes, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Diabetes", y = "Proportion", title = "Heart Disease by Diabetes") +
+  theme_minimal()
+```
+
+```{r}
+smoke_cardio_counts <- table(df$Smoking_History, df$Heart_Disease)
+prop_smoke_cardio <- prop.table(smoke_cardio_counts, margin = 1)
+prop_smoke_cardio
+##Plotting how different levels of smoke history are related to Cardiovascular Disease
+ggplot(df, aes(x = Smoking_History, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Smoking History", y = "Proportion", title = "Heart Disease by Smoking History") +
+  theme_minimal()
+```
+
+```{r}
+exercise_cardio_counts <- table(df$Exercise, df$Heart_Disease)
+prop_exercise_cardio <- prop.table(exercise_cardio_counts, margin = 1)
+prop_smoke_cardio
+##Plotting how different levels of exercise are related to Cardiovascular Disease
+ggplot(df, aes(x = Exercise, fill = Heart_Disease)) +
+  geom_bar(position = "fill") +
+  labs(x = "Exercise", y = "Proportion", title = "Heart Disease by Exercise") +
+  theme_minimal()
+```
+
+
+Exploratory Data Analysis for Data Source 2
+```{r}
+#Explore the distribution of age in years
+ggplot(df2, aes(x = age_years)) + geom_histogram(fill = "skyblue", bins = 30) + labs(title = "Distribution of Age", x = "Age (years)", y = "Frequency")
+
+```
+
+```{r}
+#Visualize the distribution of the target variable (cardiovascular disease)
+ggplot(df2, aes(x = as.factor(cardio))) + geom_bar(fill = "blue") +
+  labs(title = "Distribution of Cardiovascular Disease",
+       x = "Cardiovascular Disease (0: Absence, 1: Presence)",
+       y = "Count")
+```
+
+```{r}
+#Plotting a pie chart for blood pressure category
+bp_category_counts <- table(df2$bp_category)
+bp_category_data <- as.data.frame(bp_category_counts)
+bp_category_data
+bp_category_data$bp_category <- rownames(bp_category_data)
+colnames(bp_category_data) <- c("bp_category", "count")
+ggplot(bp_category_data, aes(x = bp_category, y = count)) + 
+  geom_bar(stat = "identity", fill = "lightgreen") + 
+  labs(title = "Distribution of Blood Pressure Categories", 
+       x = "Blood Pressure Categories", 
+       y = "Frequency") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+#Plotting Pie chart for glucose distribution
+glucose_counts <- table(df2$gluc)
+labels_with_counts <- paste(names(glucose_counts), "(", glucose_counts, ")", sep = " ")
+
+# Define colors for the pie chart
+colors <- c("lightpink", "lightyellow", "lightgrey")
+
+# Plot the pie chart
+pie(glucose_counts, 
+    main = "Glucose Distribution", 
+    labels = labels_with_counts, 
+    col = colors,
+    clockwise = TRUE, 
+    border = "white",
+    cex = 1.2
+    )
+
+legend("topright", legend = c("1: Normal", "2: Above Normal", "3: Well Above Normal"), fill = colors, title = "Glucose Levels")
+
+```
+
+```{r}
+#Plotting Pie Chart for Alcohol Consumption
+alcohol_counts <- table(df2$alco)
+labels_with_counts <- paste(names(alcohol_counts), "(", alcohol_counts, ")", sep = " ")
+
+ 
+colors <- c("lightgreen", "lightgrey")
+
+# Plot the pie chart
+pie(alcohol_counts, 
+    main = "Alcohol Consumption Distribution", 
+    labels = labels_with_counts, 
+    col = colors,
+    clockwise = TRUE, 
+    border = "white",
+    cex = 1.2
+    )
+
+# Add legend
+legend("topright", legend = c("0: Does not consume alcohol", "1: Consumes alcohol"), fill = colors, title = "Alcohol Consumption")
+
+```
+
+```{r}
+#Plotting Histogram for Weight and Height Distribution
+library(ggplot2)
+
+# Plot histogram for weight
+ggplot(df2, aes(x = weight)) +
+  geom_histogram(fill = "lightblue", color = "black", bins = 20) +
+  labs(title = "Distribution of Weight", x = "Weight", y = "Frequency")
+```
+
+```{r}
+#Plot histogram of ap_high 
+ap_hi_counts <- table(df2$ap_hi)
+ap_hi_counts
+ggplot(df2_no_duplicates, aes(x = ap_hi)) +
+  geom_histogram(fill = "pink", color = "black", bins = 30) +
+  labs(title = "Distribution of Systolic Blood Pressure", x = "ap_high", y = "Frequency")
+
+```
+
+```{r}
+#Plot histogram of and ap_lo
+ap_lo_counts <- table(df2$ap_lo)
+ap_lo_counts
+ggplot(df2_no_duplicates, aes(x = ap_lo)) +
+  geom_histogram(fill = "yellow", color = "black", bins = 30) +
+  labs(title = "Distribution of Diastolic Blood Pressure", x = "ap_lo", y = "Frequency")
+```
+```{r}
+#Plot histogram of active
+active_counts <- table(df2$active)
+active_counts
+ggplot(df2, aes(x = as.factor(active))) + geom_bar(fill = "lightgreen") +
+  labs(title = "Distribution of Activeness",
+       x = "Activeness (0: Absence, 1: Presence)",
+       y = "Count")
+```
+
+
+```{r}
+#Visualizing important features in relation with Cardiovascular Disease
+data2 <- read.csv("C:/School/CU/APAN5205/cleaned_df2.csv") %>%
+  mutate(
+    cardio = factor(cardio, levels = c(0, 1), labels = c("No", "Yes")),
+    gluc = factor(gluc, levels = c(1, 2, 3), labels = c("Normal", "Above Normal", "High")),
+    alco = factor(alco, levels = c(0, 1), labels = c("No", "Yes")),
+    active = factor(active, levels = c(0, 1), labels = c("No", "Yes")),
+    bp_category = factor(bp_category))  # Assuming bp_category is correctly labelled
+  
+```
+
+```{r}
+#Plotting how different levels of Systolic Blood Pressure are related to Cardiovascular Disease
+ggplot(data2, aes(x = factor(cardio), y = ap_hi, fill = factor(cardio))) +
+  geom_boxplot() +
+  labs(x = "Cardiovascular Disease (cardio)",
+       y = "Systolic Blood Pressure (ap_hi)",
+       title = "Boxplot of Systolic Blood Pressure by Cardiovascular Disease Status",
+       fill = "Cardio Status") + 
+  scale_fill_manual(values = c("blue", "red"), labels = c("No", "Yes")) +
+  theme_minimal() +
+  theme(legend.position = "top")  
+```
+
+```{r}
+#Plotting how different levels of Diastolic Blood Pressure are related to Cardiovascular Disease
+ggplot(data2, aes(x = factor(cardio), y = ap_lo, fill = factor(cardio))) +
+  geom_boxplot() +
+  labs(x = "Cardiovascular Disease (cardio)",
+       y = "Diastolic Blood Pressure (ap_lo)",
+       title = "Boxplot of Diastolic Blood Pressure by Cardiovascular Disease Status",
+       fill = "Cardio Status") + 
+  scale_fill_manual(values = c("blue", "red"), labels = c("No", "Yes")) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+```{r}
+cardio_gluc_counts <- table(data2$gluc, data2$cardio)
+prop_cardio_gluc <- prop.table(cardio_gluc_counts, margin = 1)
+print(prop_cardio_gluc)
+
+#Plotting how different Glucose levels are related to Cardiovascular Disease
+ggplot(data2, aes(x = gluc, fill = cardio)) +
+  geom_bar(position = "fill") +
+  labs(title = "Cardiovascular Disease Prevalence by Glucose Level",
+       x = "Glucose Level",
+       y = "Proportion",
+       fill = "Cardiovascular Disease") +
+  scale_fill_manual(values = c("No" = "blue", "Yes" = "red"), labels = c("No", "Yes")) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+
+```{r}
+cardio_activity_counts <- table(data2$active, data2$cardio)
+prop_cardio_activity <- prop.table(cardio_activity_counts, margin = 1)
+print(prop_cardio_activity)
+
+#Plotting how Activity Status are related to Cardiovascular Disease
+ggplot(data2, aes(x = active, fill = cardio)) +
+  geom_bar(position = "fill") +
+  labs(title = "Cardiovascular Disease Prevalence by Activity Status",
+       x = "Activity Status",
+       y = "Proportion",
+       fill = "Cardiovascular Disease Status") +
+  scale_fill_manual(values = c("No" = "blue", "Yes" = "red"), labels = c("No", "Yes")) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+```{r}
+cardio_bp_counts <- table(data2$bp_category, data2$cardio)
+prop_cardio_bp <- prop.table(cardio_bp_counts, margin = 1)
+print(prop_cardio_bp)
+#Plotting how Blood Pressure Categories are related to Cardiovascular Disease
+ggplot(data2, aes(x = bp_category, fill = cardio)) +
+  geom_bar(position = "fill") +
+  labs(title = "Cardiovascular Disease Prevalence by Blood Pressure Category",
+       x = "Blood Pressure Category",
+       y = "Proportion",
+       fill = "Cardiovascular Disease Status") +
+  scale_fill_manual(values = c("No" = "blue", "Yes" = "red"), labels = c("No", "Yes")) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+```
+
+
+```{r}
+cardio_alcohol_counts <- table(data2$alco, data2$cardio)
+prop_cardio_alcohol <- prop.table(cardio_alcohol_counts, margin = 1)
+print(prop_cardio_alcohol)
+#Plotting how alcohol are related to Cardiovascular Disease
+ggplot(data2, aes(x = alco, fill = cardio)) +
+  geom_bar(position = "fill") +
+  labs(title = "Cardiovascular Disease Prevalence by Alcohol",
+       x = "Alcohol Category",
+       y = "Proportion",
+       fill = "Cardiovascular Disease Status") +
+  scale_fill_manual(values = c("No" = "blue", "Yes" = "red"), labels = c("No", "Yes")) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+
+
+Model Development
+```{r}
+####################  part 1 ####################  
+
+# Loading Packages
+library(dplyr)
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(ggplot2)
+library(ROSE)
+
+df <- read.csv("C:/School/CU/APAN5205/cleaned_df1.csv") %>%
+  mutate(
+    Heart_Disease = factor(Heart_Disease),
+    General_Health = factor(General_Health),
+    Checkup = factor(Checkup),
+    Exercise = factor(Exercise),
+    Skin_Cancer = factor(Skin_Cancer),
+    Other_Cancer = factor(Other_Cancer),
+    Depression = factor(Depression),
+    Diabetes = factor(Diabetes),
+    Arthritis = factor(Arthritis),
+    Sex = factor(Sex),
+    Age_Category = factor(Age_Category),
+    Smoking_History = factor(Smoking_History)
+  )
+```
+
+```{r}
+#Splitting Data
+set.seed(123)
+trainIndex <- createDataPartition(df$Heart_Disease, p = 0.8, list = FALSE)
+trainData <- df[trainIndex, ]
+testData <- df[-trainIndex, ]
+
+# Model Training: Logistic Regression
+model_log <- glm(Heart_Disease ~ ., data = trainData, family = "binomial")
+pred_log <- predict(model_log, testData, type = "response")
+pred_class_log <- ifelse(pred_log > 0.5, "2", "1")
+conf_mat_log <- confusionMatrix(as.factor(pred_class_log), testData$Heart_Disease)
+```
+
+```{r}
+# Model Training: Decision Tree
+model_tree <- rpart(Heart_Disease ~ ., data = trainData, method="class")
+pred_tree <- predict(model_tree, testData, type = "class")
+conf_mat_tree <- confusionMatrix(pred_tree, testData$Heart_Disease)
+
+# Visualization:Decision Tree
+rpart.plot(model_tree)
+```
+
+```{r}
+# Using SMOTE to treat imbalanced training data
+set.seed(123)
+trainData_balanced <- ovun.sample(Heart_Disease ~ ., data = trainData, method = "over", N = 2*table(trainData$Heart_Disease)[1], seed = 123)$data
+```
+
+```{r}
+# Training Logistic Regression model on Balanced Data
+model_log_bal <- glm(Heart_Disease ~ ., data = trainData_balanced, family = "binomial")
+pred_log_bal <- predict(model_log_bal, testData, type = "response")
+pred_class_log_bal <- ifelse(pred_log_bal > 0.5, "2", "1")
+conf_mat_log_bal <- confusionMatrix(as.factor(pred_class_log_bal), testData$Heart_Disease)
+```
+
+```{r}
+#Training Decision Tree model on Balanced Data
+model_tree_bal <- rpart(Heart_Disease ~ ., data = trainData_balanced, method="class")
+pred_tree_bal <- predict(model_tree_bal, testData, type = "class")
+conf_mat_tree_bal <- confusionMatrix(pred_tree_bal, testData$Heart_Disease)
+
+# Visualization: Decision Tree Model on Balanced Data
+rpart.plot(model_tree_bal, main="Decision Tree (Balanced Data)")
+```
+
+```{r}
+#Visualizing Feature Importance
+importance_df <- as.data.frame(model_tree_bal$variable.importance)
+names(importance_df) <- c("Importance")
+importance_df$Variable <- rownames(importance_df)
+
+importance_df <- importance_df %>%
+  dplyr::arrange(desc(Importance)) %>%
+  dplyr::mutate(Variable = factor(Variable, levels = Variable))
+
+ggplot(importance_df, aes(x = Variable, y = Importance)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Feature Importance from Decision Tree Model", x = "Variables", y = "Importance") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+print(conf_mat_log)
+print(conf_mat_tree)
+print(conf_mat_log_bal)
+print(conf_mat_tree_bal)
+```
+
+```{r}
+# Comparison on Model Performance before and after treating imbalanced data
+results <- data.frame(
+  Model = c("Logistic Regression (Unbalanced)", "Decision Tree (Unbalanced)", 
+            "Logistic Regression (Balanced)", "Decision Tree (Balanced)"),
+  Accuracy = c(conf_mat_log$overall['Accuracy'], conf_mat_tree$overall['Accuracy'], 
+               conf_mat_log_bal$overall['Accuracy'], conf_mat_tree_bal$overall['Accuracy']),
+  Sensitivity = c(conf_mat_log$byClass['Sensitivity'], conf_mat_tree$byClass['Sensitivity'], 
+                  conf_mat_log_bal$byClass['Sensitivity'], conf_mat_tree_bal$byClass['Sensitivity']),
+  Specificity = c(conf_mat_log$byClass['Specificity'], conf_mat_tree$byClass['Specificity'], 
+                  conf_mat_log_bal$byClass['Specificity'], conf_mat_tree_bal$byClass['Specificity']),
+  Pos_Pred_Value = c(conf_mat_log$byClass['Pos Pred Value'], conf_mat_tree$byClass['Pos Pred Value'],
+                     conf_mat_log_bal$byClass['Pos Pred Value'], conf_mat_tree_bal$byClass['Pos Pred Value']),
+  Neg_Pred_Value = c(conf_mat_log$byClass['Neg Pred Value'], conf_mat_tree$byClass['Neg Pred Value'],
+                     conf_mat_log_bal$byClass['Neg Pred Value'], conf_mat_tree_bal$byClass['Neg Pred Value']),
+  Kappa = c(conf_mat_log$overall['Kappa'], conf_mat_tree$overall['Kappa'],
+            conf_mat_log_bal$overall['Kappa'], conf_mat_tree_bal$overall['Kappa'])
+)
+
+print(results)
+
+```
+
+
+
+Cluster then Predict Using Linear Regression
+```{r}
+#Split Data
+set.seed(1706)
+df = as.data.frame(lapply(df, as.numeric))
+split = createDataPartition(y=df$Heart_Disease,p = 0.7,list = F,groups = 100)
+train = df[split,]
+test = df[-split,]
+
+# Apply SMOTE to balance the training data
+train_balanced <- ovun.sample(Heart_Disease ~ ., data = train, method = "over", seed = 1234)$data
+
+# Check the class distribution after balancing
+table(train_balanced$Heart_Disease)
+
+```
+
+```{r}
+#Normalizing the data 
+trainMinusHD = subset(train_balanced,select=-c(Heart_Disease))
+testMinusHD = subset(test,select=-c(Heart_Disease))
+preproc = preProcess(trainMinusHD)
+trainNorm = predict(preproc,trainMinusHD)
+testNorm = predict(preproc,testMinusHD)
+```
+
+```{r}
+#K-means Cluster Analysis
+set.seed(1706)
+km = kmeans(x = trainNorm,centers = 2,iter.max=10000,nstart=100)
+```
+
+```{r}
+#Apply Clustering Solution from Train to Test
+library(flexclust)
+km_kcca = as.kcca(km,trainNorm) 
+clusterTrain = predict(km_kcca)
+clusterTest = predict(km_kcca,newdata=testNorm)
+```
+
+```{r}
+#Distribution of Heart-Disease across clusters in Train
+table(clusterTrain)
+#Distribution of Heart-Disease across clusters in Test
+table(clusterTest)
+```
+
+```{r}
+#Split train and test based on cluster membership
+train1 = subset(train,clusterTrain==1)
+train2 = subset(train,clusterTrain==2)
+test1 = subset(test,clusterTest==1)
+test2 = subset(test,clusterTest==2)
+```
+
+```{r}
+#Predict for each Cluster then Combine
+lm1 = lm(Heart_Disease~.,train1)
+lm2 = lm(Heart_Disease~.,train2)
+pred1 = predict(lm1,newdata=test1)
+pred2 = predict(lm2,newdata=test2)
+sse1 = sum((test1$Heart_Disease-pred1)^2)
+sse2 = sum((test2$Heart_Disease-pred2)^2)
+
+# Combine predictions
+predOverall = c(pred1,pred2) 
+testOverall <- c(test1$Heart_Disease, test2$Heart_Disease)
+sseOverall = sum((predOverall - testOverall)^2)
+
+# Calculate the confusion matrix
+conf_matrix <- table(round(predOverall), testOverall)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP <- sum((round(predOverall) == 1) & (testOverall == 1))
+TN <- sum((round(predOverall) == 0) & (testOverall == 0))
+FP <- sum((round(predOverall) == 1) & (testOverall == 0))
+FN <- sum((round(predOverall) == 0) & (testOverall == 1))
+
+# Calculate accuracy
+accuracy <- (TP + TN) / sum(conf_matrix)
+
+# Print the results
+sse1
+sse2
+sseOverall
+accuracy
+```
+
+```{r}
+#Predict Using Linear Regression on entire data
+linear = lm(Heart_Disease~.,train_balanced)
+predLinear = predict(linear,newdata=test)
+sseLinear = sum((predLinear-test$Heart_Disease)^2)
+
+# Calculate Confusion Matrix
+conf_matrix_linear <- table(round(predLinear), test$Heart_Disease)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP_linear <- sum((round(predLinear) == 1) & (test$Heart_Disease == 1))
+TN_linear <- sum((round(predLinear) == 0) & (test$Heart_Disease == 0))
+FP_linear <- sum((round(predLinear) == 1) & (test$Heart_Disease == 0))
+FN_linear <- sum((round(predLinear) == 0) & (test$Heart_Disease == 1))
+
+# Calculate accuracy
+accuracy_linear <- (TP_linear + TN_linear) / sum(conf_matrix_linear)
+
+sseLinear
+accuracy_linear
+```
+
+Cluster then Predict Using Tree
+```{r}
+tree1 = rpart(Heart_Disease~.,train1,minbucket=10)
+tree2 = rpart(Heart_Disease~.,train2,minbucket=10)
+pred1 = predict(tree1,newdata=test1)
+pred2 = predict(tree2,newdata=test2)
+
+sse1 = sum((test1$Heart_Disease-pred1)^2)
+sse2 = sum((test2$Heart_Disease-pred2)^2)
+predTreeCombine = c(pred1,pred2)
+
+Heart_Disease_Overall = c(test1$Heart_Disease,test2$Heart_Disease)
+sseTreeCombine = sum((predTreeCombine - Heart_Disease_Overall)^2)
+
+
+# Calculate the confusion matrix
+conf_matrix <- table(round(predTreeCombine), Heart_Disease_Overall)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP <- sum((round(predTreeCombine) == 1) & (Heart_Disease_Overall == 1))
+TN <- sum((round(predTreeCombine) == 0) & (Heart_Disease_Overall == 0))
+FP <- sum((round(predTreeCombine) == 1) & (Heart_Disease_Overall== 0))
+FN <- sum((round(predTreeCombine) == 0) & (Heart_Disease_Overall == 1))
+
+# Calculate accuracy
+accuracy <- (TP + TN) / sum(conf_matrix)
+
+
+# Print the results
+sse1
+sse2
+sseTreeCombine
+accuracy
+
+```
+
+Predict Using Tree on Entire Data
+```{r}
+tree = rpart(Heart_Disease~.,train_balanced,minbucket=10)
+predTree = predict(tree,newdata=test)
+sseTree = sum(predTree - test$Heart_Disease)^2
+
+# Calculate Confusion Matrix
+conf_matrix_tree <- table(round(predTree), test$Heart_Disease)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP_Tree <- sum((round(predTree) == 1) & (test$Heart_Disease == 1))
+TN_Tree <- sum((round(predTree) == 0) & (test$Heart_Disease == 0))
+FP_Tree <- sum((round(predTree) == 1) & (test$Heart_Disease == 0))
+FN_Tree <- sum((round(predTree) == 0) & (test$Heart_Disease == 1))
+
+# Calculate accuracy
+accuracy_Tree <- (TP_Tree + TN_Tree) / sum(conf_matrix_tree)
+
+
+sseTree
+accuracy_Tree
+```
+
+
+
+####################  part 2  ####################  
+
+```{r}
+df2 <- read.csv("C:/School/CU/APAN5205/cleaned_df2.csv")
+head(df2)
+```
+
+Predict Using Linear Regression on entire dataset
+```{r}
+#Splitting Data
+set.seed(1706)
+split = createDataPartition(y=df2$cardio,p = 0.7,list = F,groups = 100)
+train = df2[split,]
+test = df2[-split,]
+
+#Training Linear Regression Model
+linear2 = lm(cardio~.,train)
+
+#Predicting with Linear Regression Model
+predLinear2 = predict(linear2,newdata=test)
+sseLinear2 = sum((predLinear2-test$cardio)^2)
+
+# Calculate Confusion Matrix
+conf_matrix_linear <- table(round(predLinear2), test$cardio)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP_linear <- sum((round(predLinear2) == 1) & (test$cardio == 1))
+TN_linear <- sum((round(predLinear2) == 0) & (test$cardio == 0))
+FP_linear <- sum((round(predLinear2) == 1) & (test$cardio == 0))
+FN_linear <- sum((round(predLinear2) == 0) & (test$cardio == 1))
+
+# Calculate accuracy
+accuracy_linear2 <- (TP_linear + TN_linear) / sum(conf_matrix_linear)
+
+sseLinear2
+accuracy_linear2
+```
+
+Cluster Then Predict Using Linear Regression
+```{r}
+#Normalizing the data
+trainMinusCardio = subset(train,select=-c(cardio))
+testMinusCardio = subset(test,select=-c(cardio))
+
+preproc = preProcess(trainMinusCardio)
+trainNorm = predict(preproc,trainMinusCardio)
+testNorm = predict(preproc,testMinusCardio)
+```
+
+```{r}
+#K-means Clustering
+set.seed(1706)
+km = kmeans(x = trainNorm,centers = 2,iter.max=10000,nstart=100)
+```
+
+```{r}
+#Apply Clustering Solution from Train to Test
+km_kcca = as.kcca(km,trainNorm) 
+clusterTrain = predict(km_kcca)
+clusterTest = predict(km_kcca,newdata=testNorm)
+table(clusterTrain)
+table(clusterTest)
+```
+
+```{r}
+#Split train and test based on cluster membership
+train1 = subset(train,clusterTrain==1)
+train2 = subset(train,clusterTrain==2)
+test1 = subset(test,clusterTest==1)
+test2 = subset(test,clusterTest==2)
+```
+
+```{r}
+#Predict for each Cluster then Combine
+lm1 = lm(cardio~.,train1)
+lm2 = lm(cardio~.,train2)
+pred1 = predict(lm1,newdata=test1)
+pred2 = predict(lm2,newdata=test2)
+sse1 = sum((test1$cardio-pred1)^2)
+sse2 = sum((test2$cardio-pred2)^2)
+predOverall = c(pred1,pred2)
+cardioOverall = c(test1$cardio,test2$cardio)
+sseOverall = sum((predOverall - cardioOverall)^2)
+
+# Calculate the confusion matrix
+conf_matrix <- table(round(predOverall), cardioOverall)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP <- sum((round(predOverall) == 1) & (cardioOverall == 1))
+TN <- sum((round(predOverall) == 0) & (cardioOverall == 0))
+FP <- sum((round(predOverall) == 1) & (cardioOverall== 0))
+FN <- sum((round(predOverall) == 0) & (cardioOverall == 1))
+
+# Calculate accuracy
+accuracy <- (TP + TN) / sum(conf_matrix)
+
+# Print the results
+sse1
+sse2
+sseOverall
+accuracy
+```
+
+Predicting Using Tree on entire Dataset
+```{r}
+tree2 = rpart(cardio~.,train,minbucket=10)
+predTree2 = predict(tree2,newdata=test)
+sseTree2 = sum((predTree2 - test$cardio)^2)
+
+conf_matrix_tree2 <- table(round(predTree2), test$cardio)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP_Tree2 <- sum((round(predTree2) == 1) & (test$cardio == 1))
+TN_Tree2 <- sum((round(predTree2) == 0) & (test$cardioe == 0))
+FP_Tree2 <- sum((round(predTree2) == 1) & (test$cardio == 0))
+FN_Tree2 <- sum((round(predTree2) == 0) & (test$cardio == 1))
+
+# Calculate accuracy
+accuracy_Tree2 <- (TP_Tree2 + TN_Tree2) / sum(conf_matrix_tree2)
+
+sseTree2
+accuracy_Tree2
+```
+
+Cluster Then Predict Using Tree
+```{r}
+tree1 = rpart(cardio~.,train1,minbucket=10)
+tree2 = rpart(cardio~.,train2,minbucket=10)
+pred1 = predict(tree1,newdata=test1)
+pred2 = predict(tree2,newdata=test2)
+
+sse1 = sum((test1$cardio-pred1)^2)
+sse2 = sum((test2$cardio-pred2)^2)
+
+predTreeCombine = c(pred1,pred2)
+cardioOverall = c(test1$cardio,test2$cardio)
+sseTreeCombine = sum((predTreeCombine - cardioOverall)^2)
+
+# Calculate the confusion matrix
+conf_matrix <- table(round(predTreeCombine), cardioOverall)
+
+# Calculate True Positives, True Negatives, False Positives, False Negatives
+TP <- sum((round(predTreeCombine) == 1) & (cardioOverall == 1))
+TN <- sum((round(predTreeCombine) == 0) & (cardioOverall == 0))
+FP <- sum((round(predTreeCombine) == 1) & (cardioOverall== 0))
+FN <- sum((round(predTreeCombine) == 0) & (cardioOverall == 1))
+
+# Calculate accuracy
+accuracy <- (TP + TN) / sum(conf_matrix)
+
+
+# Print the results
+sse1
+sse2
+sseTreeCombine
+accuracy
+```
+
+
+
